@@ -1,0 +1,163 @@
+---
+title: "Intro_to_MAF"
+date: "2024-01-19"
+---
+
+***Deliverables***
+-Upload this R Notebook to your GitHub and submit the link to your Repo on BB.
+-Include any graphs or figures created in this assignment in the folder with your R notebook with descriptive file names.
+
+Since this is an optional partner activity, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *At the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In MAF_Tutorial.Rmd, you looked at how to analyze mutation data in terms of clinical variables as well as mutation status. In this assignment, you will need to combine the two skills to demonstrate your understanding of categorical variables and R data structures.
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data .csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+knitr::opts_knit$set(root.dir = normalizePath("/Users/danasouter/Desktop/qbio490/qbio_490_dana/analysis_data"))
+
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+
+clinical <- read.csv("/Users/danasouter/Desktop/qbio490/qbio_490_dana/analysis_data/skcm_clinical_data.csv")
+colnames(clinical)[ colnames(clinical) == "bcr_patient_barcode" ] <- "Tumor_Sample_Barcode"
+write.csv(clinical, "/Users/danasouter/Desktop/qbio490/qbio_490_dana/analysis_data/skcm_clinical_data.csv", row.names = FALSE)
+
+```
+
+```{r}
+maf_query <- GDCquery(
+    project = "TCGA-SKCM", 
+    data.category = "Simple Nucleotide Variation", 
+    access = "open", # we only have access to somatic mutations which are open access
+    data.type = "Masked Somatic Mutation", 
+    workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+GDCdownload(maf_query) # you shouldn't have to redownload any data!
+
+maf <- GDCprepare(maf_query) # as long as it runs, ignore any errors
+
+maf_object <- read.maf(maf = maf, 
+                       clinicalData = clinical,
+                       isTCGA = TRUE)
+
+
+```
+
+
+*1*
+Choose a clinical variable to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+clinical$gender_factor <- as.factor(clinical$gender)
+
+clinical$gender_factor <- ifelse(clinical$gender_factor == "Unknown", NA, clinical$gender_factor)
+
+write.csv(clinical, "/Users/danasouter/Desktop/qbio490/qbio_490_dana/analysis_data/skcm_clinical_data.csv", row.names = FALSE)
+
+
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+sample_ids_group1 <- clinical$Tumor_Sample_Barcode[clinical$gender_factor == "Group1"]
+sample_ids_group2 <- clinical$Tumor_Sample_Barcode[clinical$gender_factor == "Group2"]
+
+maf_group1 <- subset(maf_object, samples %in% sample_ids_group1)
+maf_group2 <- subset(maf_object, samples %in% sample_ids_group2)
+
+top_genes_group1 <- top10(maf_group1, n = 16) 
+top_genes_group2 <- top10(maf_group2, n = 16)  
+
+coOncoplot(list(maf_group1, maf_group2), top = 16) 
+
+selected_gene <- "BRAF"
+
+# BRAF is a proto-oncogene that encodes a protein belonging to the RAF kinase family of serine/threonine protein kinases.Mutations in BRAF are commonly associated with various cancers, including melanoma. The observed discrepancy in BRAF mutations between the two groups could be due to differences in environmental exposures, genetic predispositions, or treatment responses.
+```
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+#str(maf_object)
+
+maf_subset <- subset(maf_object, Tumor_Sample_Barcode %in% clinical$Tumor_Sample_Barcode)
+
+contingency_table <- table(clinical$gender_factor, maf_subset$BRAF)
+
+if (sum(contingency_table) < 4) {
+  cat("Contingency table does not have sufficient data for Fisher's Exact Test.\n")
+} else {
+  fisher_test <- fisher.test(contingency_table)
+  
+  mosaic_plot <- mosaicplot(contingency_table, main = "Contingency Table")
+  png("mosaic_plot.png")
+  print(mosaic_plot)
+  dev.off()
+  
+  odds_ratio <- fisher_test$estimate
+  p_value <- fisher_test$p.value
+  
+  cat("Odds Ratio:", odds_ratio, "\n")
+  cat("P-value:", p_value, "\n")
+  
+  if (p_value < 0.05) {
+    cat("There is a statistically significant relationship between the presence of mutations in BRAF and gender.\n")
+  } else {
+    cat("There is no statistically significant relationship between the presence of mutations in BRAF and gender.\n")
+  }
+}
+
+
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+library(ggplot2)
+
+maf_subset <- subset(maf_object, Tumor_Sample_Barcode %in% clinical$Tumor_Sample_Barcode)
+maf_gene <- subset(maf_subset, Gene == 'BRAF')
+
+colollipop_plot <- ggplot(maf_gene, aes(x = Gene, y = Start_Position, color = Variant_Classification)) +
+  geom_point(position = position_dodge(width = 0.5), size = 2) +
+  geom_segment(aes(xend = Gene, yend = Start_Position, color = Variant_Classification, group = interaction(Start_Position, Variant_Classification)), position = position_dodge(width = 0.5), size = 0.5) +
+  scale_color_manual(values = c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00", "#FFFF33", "#A65628", "#F781
+
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+#it said i didnt have these libraries
+library(survival)
+library(survminer)
+
+if (length(clinical$Tumor_Sample_Barcode) != nrow(maf_object)) {
+  stop("Number of samples in the clinical dataset does not match the number of samples in the mutation annotation file.")
+} else {
+  cat("Number of samples in clinical dataset:", length(clinical$Tumor_Sample_Barcode), "\n")
+  cat("Number of samples in mutation annotation file:", nrow(maf_object), "\n")
+}
+
+clinical$Overall_Survival_Status <- ifelse(clinical$survival_column == "Alive", 1, 0)
+surv_obj <- Surv(time = clinical$time_column, event = clinical$Overall_Survival_Status)
+maf_gene <- subset(maf_object, Gene == 'BRAF')
+mutation_status <- ifelse(maf_gene$Variant_Classification != "Wildtype", 1, 0)
+
+fit <- survfit(surv_obj ~ mutation_status)
+ggsurvplot(fit, data = maf_gene, title = "Kaplan-Meier Survival Curve for BRAF Mutations", xlab = "Time (days)", ylab = "Survival Probability", legend = "bottom")
+
+# i had a lot of trouble debugging this
+```
